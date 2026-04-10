@@ -1,0 +1,57 @@
+services:
+  traefik:
+    image: traefik:v3.0
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--providers.file.filename=/etc/traefik/certs.yaml"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080" # Дашборд Traefik
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./cert.crt:/etc/traefik/certs/cert.crt:ro
+      - ./key.key:/etc/traefik/certs/key.key:ro
+      - ./certs.yaml:/etc/traefik/certs.yaml:ro
+
+  nginx-service:
+    image: nginx:latest
+    ports:
+      - "81:80" # Доступ по localhost:81 напрямую
+    labels:
+      - "traefik.enable=true"
+      # Правило: если запрос пришел на localhost (порт 80 задан в entrypoint)
+      - "traefik.http.routers.nginx.rule=Host(`localhost`)"
+      # - "traefik.http.routers.nginx.entrypoints=web"
+      - "traefik.http.routers.nginx.entrypoints=websecure"
+      - "traefik.http.routers.nginx.tls=true"
+      # Указываем внутренний порт контейнера nginx
+      - "traefik.http.services.nginx.loadbalancer.server.port=80"
+  
+  redis:
+    image: redis:alpine
+    container_name: notes-redis
+
+  notes-manager:
+    # Указываем ПУТЬ к папке другого репозитория
+    build: ../service-notes-manager  
+    container_name: notes-service
+    depends_on:
+      - redis
+    volumes:
+      # Пробрасываем папки для сохранения данных (заметки и юзеры)
+      - ../service-notes-manager/server/notes:/app/server/notes
+      - ../service-notes-manager/server/user_manager.json:/app/server/user_manager.json
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.notes.rule=Host(`localhost`) && PathPrefix(`/app`)"
+      - "traefik.http.routers.notes.entrypoints=websecure"
+      - "traefik.http.routers.notes.tls=true"
+      # Отрезаем /app перед тем как отправить запрос в FastAPI
+      - "traefik.http.middlewares.notes-strip.stripprefix.prefixes=/app"
+      - "traefik.http.routers.notes.middlewares=notes-strip"
+      - "traefik.http.services.notes.loadbalancer.server.port=5000"
